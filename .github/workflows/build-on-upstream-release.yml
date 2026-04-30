@@ -54,29 +54,35 @@ jobs:
           git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
 
-      - name: Pull patches/ from handshake branch
+      - name: Extract patches/ from handshake branch
+        id: extract
         if: steps.ref.outputs.is_release == 'true'
         run: |
           set -euo pipefail
           git fetch origin handshake:refs/remotes/origin/handshake
-          git checkout origin/handshake -- patches/
+          mkdir -p "$RUNNER_TEMP/patches"
+          git archive origin/handshake patches | tar -xC "$RUNNER_TEMP/"
+          ls -la "$RUNNER_TEMP/patches/"
+          echo "dir=$RUNNER_TEMP/patches" >> "$GITHUB_OUTPUT"
 
       - name: Read patch revision
         id: rev
         run: |
           set -euo pipefail
-          if [[ -f patches/.revision ]]; then
-            REV=$(tr -d '[:space:]' < patches/.revision)
+          REV_FILE="${{ steps.extract.outputs.dir }}/.revision"
+          if [[ -f "$REV_FILE" ]]; then
+            REV=$(tr -d '[:space:]' < "$REV_FILE")
           else
             REV="0"
           fi
           echo "revision=$REV" >> "$GITHUB_OUTPUT"
 
       - name: Apply patch series
+        if: steps.ref.outputs.is_release == 'true'
         run: |
           set -euo pipefail
           shopt -s nullglob
-          patches=(patches/*.patch)
+          patches=("${{ steps.extract.outputs.dir }}"/*.patch)
           if (( ${#patches[@]} == 0 )); then
             echo "No patches to apply; building stock upstream."
             exit 0
