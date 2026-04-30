@@ -1,9 +1,6 @@
 name: Build patched mosquitto on upstream release
 
 on:
-  push:
-    tags:
-      - 'v*'
   pull_request:
     branches: [ handshake ]
     paths:
@@ -31,10 +28,7 @@ jobs:
         id: ref
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             REF="${{ inputs.tag }}"
             if [[ -z "$REF" ]]; then
               REF=$(git ls-remote --tags --refs --sort=-v:refname \
@@ -44,7 +38,6 @@ jobs:
             echo "ref=$REF" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
-            # pull_request: build the PR head, no upstream tag involved
             echo "ref=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
