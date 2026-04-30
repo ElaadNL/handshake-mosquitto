@@ -8,7 +8,7 @@ from psutil import Process as ProcessInfo
 def do_test():
     num_connects = 1000
     num_props = 5000
-    
+
     rc = 1
     props = mqtt5_props.gen_string_pair_prop(mqtt5_props.USER_PROPERTY, "key", "value")
     for i in range(0, num_props):
@@ -23,7 +23,7 @@ def do_test():
     try:
         broker_info = ProcessInfo(broker.pid)
         cpu_user_start = broker_info.cpu_times().user
-        
+
         for i in range(num_connects):
             sock = mosq_test.do_client_connect(connect_packet_slow, connack_packet, port=port)
             sock.close()
@@ -43,8 +43,8 @@ def do_test():
             rc = 0
         else:
             print(f"CPU usage ratio with/without properties is {cpu_user_with_props / cpu_user_without_props}")
-    except mosq_test.TestError:
-        pass
+    except Exception:
+        traceback.print_stack(file=sys.stdout)
     finally:
         mosq_test.terminate_broker(broker)
         if mosq_test.wait_for_subprocess(broker):
