@@ -102,6 +102,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install dist build deps (xsltproc for man pages)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xsltproc docbook-xsl
+
       - name: Stage source tarball for docker/local
         run: |
           set -euo pipefail
