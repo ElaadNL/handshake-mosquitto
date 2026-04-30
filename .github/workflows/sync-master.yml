@@ -1,0 +1,57 @@
+name: Sync master and tags from upstream
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/eclipse-mosquitto/mosquitto.git
+
+      - name: Fetch upstream master and tags
+        run: git fetch upstream master --tags --prune
+
+      - name: Fast-forward master to upstream/master
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor HEAD upstream/master; then
+            git merge --ff-only upstream/master
+            git push origin master
+          else
+            echo "::error::origin/master has diverged from upstream/master; refusing to fast-forward"
+            exit 1
+          fi
+
+      - name: Push any new upstream tags to origin
+        run: |
+          set -euo pipefail
+          # Push tags that exist locally (from `fetch upstream --tags`) but
+          # not yet on origin. `--follow-tags` only covers reachable ones,
+          # so push tags explicitly.
+          mapfile -t tags < <(git for-each-ref --format='%(refname:short)' refs/tags/)
+          for t in "${tags[@]}"; do
+            if ! git ls-remote --tags --exit-code origin "refs/tags/$t" >/dev/null 2>&1; then
+              echo "Pushing new tag: $t"
+              git push origin "refs/tags/$t"
+            fi
+          done

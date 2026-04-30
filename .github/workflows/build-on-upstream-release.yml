@@ -1,0 +1,142 @@
+name: Build patched mosquitto on upstream release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ handshake ]
+    paths:
+      - 'patches/**'
+      - '.github/workflows/build-on-upstream-release.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to build (e.g. v2.1.2). Defaults to latest tag.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/elaadnl/handshake-mosquitto
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve build ref
+        id: ref
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            REF="${{ inputs.tag }}"
+            if [[ -z "$REF" ]]; then
+              REF=$(git ls-remote --tags --refs --sort=-v:refname \
+                "https://github.com/${{ github.repository }}.git" 'v*' \
+                | head -1 | awk -F/ '{print $NF}')
+            fi
+            echo "ref=$REF" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            # pull_request: build the PR head, no upstream tag involved
+            echo "ref=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout build ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git identity
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Pull patches/ from handshake branch
+        if: steps.ref.outputs.is_release == 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin handshake:refs/remotes/origin/handshake
+          git checkout origin/handshake -- patches/
+
+      - name: Read patch revision
+        id: rev
+        run: |
+          set -euo pipefail
+          if [[ -f patches/.revision ]]; then
+            REV=$(tr -d '[:space:]' < patches/.revision)
+          else
+            REV="0"
+          fi
+          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+
+      - name: Apply patch series
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          patches=(patches/*.patch)
+          if (( ${#patches[@]} == 0 )); then
+            echo "No patches to apply; building stock upstream."
+            exit 0
+          fi
+          git am --3way "${patches[@]}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage source tarball for docker/local
+        run: |
+          set -euo pipefail
+          # `make dist` produces dist/mosquitto-<version>.tar.gz with the
+          # repo's standard DISTFILES list. docker/local/Dockerfile expects
+          # mosq.tar.gz in its build context, so rename + copy.
+          make dist
+          cp dist/mosquitto-*.tar.gz docker/local/mosq.tar.gz
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          IS_RELEASE="${{ steps.ref.outputs.is_release }}"
+          REF="${{ steps.ref.outputs.ref }}"
+          REV="${{ steps.rev.outputs.revision }}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          tags=()
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            tags+=("${{ env.IMAGE }}:${REF}-handshake-${REV}")
+            tags+=("${{ env.IMAGE }}:latest")
+          fi
+          tags+=("${{ env.IMAGE }}:sha-${SHORT_SHA}")
+          ( IFS=$'\n'; echo "tags<<EOF" >> "$GITHUB_OUTPUT"; echo "${tags[*]}" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT" )
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./docker/local
+          file: ./docker/local/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.ref.outputs.is_release == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=mosquitto
+          cache-to: type=gha,scope=mosquitto,mode=max
+          build-args: |
+            VERSION=${{ steps.ref.outputs.ref }}-handshake-${{ steps.rev.outputs.revision }}

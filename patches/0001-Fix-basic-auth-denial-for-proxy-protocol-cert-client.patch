@@ -1,0 +1,27 @@
+From b71e765671ff59da6671fdfd664c4085fe1ba148 Mon Sep 17 00:00:00 2001
+From: Pieter Hollander <eclipse@hollander.online>
+Date: Thu, 2 Apr 2026 22:19:07 +0200
+Subject: [PATCH] Fix basic auth denial for proxy-protocol cert clients
+
+Signed-off-by: Pieter Hollander <eclipse@hollander.online>
+---
+ src/handle_connect.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/handle_connect.c b/src/handle_connect.c
+index 9a5b9f14..57505534 100644
+--- a/src/handle_connect.c
++++ b/src/handle_connect.c
+@@ -1248,7 +1248,8 @@ int handle__connect(struct mosquitto *context)
+ 		}
+ 	}else{
+ #ifdef WITH_TLS
+-		if(context->listener->ssl_ctx && (context->listener->use_identity_as_username || context->listener->use_subject_as_username)){
++		if((context->listener->ssl_ctx || context->listener->enable_proxy_protocol > 0)
++				&& (context->listener->use_identity_as_username || context->listener->use_subject_as_username)){
+ 			/* Authentication assumed to be cleared */
+ 		}else
+ #endif
+-- 
+2.50.1 (Apple Git-155)
+
