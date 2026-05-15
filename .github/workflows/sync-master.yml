@@ -4,6 +4,16 @@ on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force-reset origin/master to upstream/master (use only when upstream rewrote history).'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: sync-master
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -31,14 +41,40 @@ jobs:
       - name: Fetch upstream master and tags
         run: git fetch upstream master --tags --prune
 
-      - name: Fast-forward master to upstream/master
+      - name: Sync master to upstream/master
+        env:
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          if git merge-base --is-ancestor HEAD upstream/master; then
+          ORIGIN_SHA=$(git rev-parse origin/master)
+          UPSTREAM_SHA=$(git rev-parse upstream/master)
+          echo "origin/master   = $ORIGIN_SHA"
+          echo "upstream/master = $UPSTREAM_SHA"
+
+          if [ "$ORIGIN_SHA" = "$UPSTREAM_SHA" ]; then
+            echo "Already in sync; nothing to push."
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "$ORIGIN_SHA" "$UPSTREAM_SHA"; then
             git merge --ff-only upstream/master
             git push origin master
+            exit 0
+          fi
+
+          echo "::group::Divergence detected"
+          echo "Commits on origin/master not in upstream/master (will be DISCARDED if force=true):"
+          git log --oneline "$UPSTREAM_SHA..$ORIGIN_SHA" || true
+          echo "Commits on upstream/master not in origin/master:"
+          git log --oneline "$ORIGIN_SHA..$UPSTREAM_SHA" || true
+          echo "::endgroup::"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "force=true: resetting origin/master to upstream/master ($UPSTREAM_SHA)"
+            git reset --hard upstream/master
+            git push --force-with-lease="master:$ORIGIN_SHA" origin master
           else
-            echo "::error::origin/master has diverged from upstream/master; refusing to fast-forward"
+            echo "::error::origin/master has diverged from upstream/master. Re-run via Actions -> Run workflow -> force = true to overwrite. origin=$ORIGIN_SHA upstream=$UPSTREAM_SHA"
             exit 1
           fi
 
