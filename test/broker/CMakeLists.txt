@@ -127,6 +127,7 @@ add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-clean-session-csT-lcsF.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-clean-session-csT-lcsN.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-clean-session-csT-lcsT.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-config-reload.py")
+add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-connack-retain-not-supported.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-fail-persist-resend-qos1.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 2 "06-bridge-fail-persist-resend-qos2.py")
 add_python_test(PY_TEST_NAMES ${PREFIX} 1 "06-bridge-no-local.py")
@@ -295,10 +296,10 @@ check_for_missing_tests(PY_TEST_NAMES)
 
 foreach(PERSIST_TYPE ${PERSIST_LIST})
     foreach(PY_TEST_FILE ${PY_PERSIST_TEST_FILES})
-        set(test_name "broker-${PY_TEST_NAME}-${PERSIST_TYPE}")
         get_filename_component(PY_TEST_NAME ${PY_TEST_FILE} NAME_WE)
+        set(test_name "broker-${PY_TEST_NAME}-${PERSIST_TYPE}")
         add_test(NAME ${test_name}
-            COMMAND ${PY_TEST_FILE} ${PERSIST_TYPE}
+            COMMAND python3 ${PY_TEST_FILE} ${PERSIST_TYPE}
         )
         mosq_set_test_props(${test_name})
         set_tests_properties(${test_name}

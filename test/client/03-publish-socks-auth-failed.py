@@ -42,7 +42,7 @@ def do_test(proto_ver, host):
     }
     env = mosq_test.env_add_ld_library_path(env)
     cmd = [
-            f'{mosq_test.get_build_root()}/client/mosquitto_pub',
+            mosq_paths.mosquitto_pub,
             '-h', host,
             '-p', str(port2),
             '-q', '1',
@@ -72,7 +72,7 @@ def do_test(proto_ver, host):
         print(e)
     finally:
         proxy.terminate()
-        broker.terminate()
+        mosq_test.terminate_broker(broker)
         if mosq_test.wait_for_subprocess(broker):
             print("broker not terminated")
             if rc == 0: rc=1

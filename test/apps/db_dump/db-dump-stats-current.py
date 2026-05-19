@@ -23,11 +23,11 @@ def check_db(port, counts):
         f"DB_CHUNK_CLIENT:     {counts[5]}\n"
 
     cmd = [
-        mosq_test.get_build_root()+'/apps/db_dump/mosquitto_db_dump',
+        mosq_paths.mosquitto_db_dump,
         '--stats',
-        f'{port}/mosquitto.db'
+        Path(str(port), 'mosquitto.db')
     ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1, encoding='utf-8')
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, encoding='utf-8')
     if res.stdout != stdout:
         print(res.stdout)
         raise mosq_test.TestError
@@ -55,7 +55,7 @@ def do_test(counts):
 
         # Set up persistent client session, including a subscription
         cmd = [
-            mosq_test.get_build_root()+'/client/mosquitto_sub',
+            mosq_paths.mosquitto_sub,
             '-c',
             '-i', 'client-id',
             '-p', str(port),
@@ -67,7 +67,7 @@ def do_test(counts):
 
         # Publish a retained message which is also queued for the subscriber
         cmd = [
-            mosq_test.get_build_root()+'/client/mosquitto_pub',
+            mosq_paths.mosquitto_pub,
             '-p', str(port),
             '-q', '1',
             '-t', 'sub-topic',
@@ -76,7 +76,7 @@ def do_test(counts):
         ]
         subprocess.run(cmd, timeout=10, env=env)
 
-        broker.terminate()
+        mosq_test.terminate_broker(broker)
         if mosq_test.wait_for_subprocess(broker):
             print("broker not terminated")
             raise mosq_test.TestError
@@ -89,7 +89,7 @@ def do_test(counts):
         os.remove(conf_file)
         shutil.rmtree(str(port))
         if broker is not None:
-            broker.terminate()
+            mosq_test.terminate_broker(broker)
 
     exit(rc)
 

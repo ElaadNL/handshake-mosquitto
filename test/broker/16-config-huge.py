@@ -7,7 +7,6 @@
 from mosq_test_helper import *
 import os
 import platform
-import signal
 
 def write_acl(filename):
     with open(filename, 'w') as f:
@@ -113,7 +112,7 @@ def write_config(filename, ports, per_listener_settings, plugver, acl_file):
         # Default listener
 
         # Listeners
-        f.write("plugin_load auth c/auth_plugin_v%d.so\n" % (plugver))
+        f.write(f"plugin_load auth {mosq_paths.test_plugin(f'auth_plugin_v{plugver}')}\n")
         f.write("plugin_opt_test true\n")
         f.write("auth_plugin_deny_special_chars false\n")
 
@@ -129,16 +128,19 @@ def write_config(filename, ports, per_listener_settings, plugver, acl_file):
         f.write("accept_protocol_versions 3,4,5\n")
         if platform.system() == "Darwin":
             f.write("bind_interface lo0\n")
+        elif platform.system() == "Windows":
+            # bind_interface not supported
+            pass
         else:
             f.write("bind_interface lo\n")
-        f.write(f"cafile {ssl_dir}/all-ca.crt\n")
-        f.write(f"certfile {ssl_dir}/server.crt\n")
+        f.write(f"cafile {ssl_dir / 'all-ca.crt'}\n")
+        f.write(f"certfile {ssl_dir / 'server.crt'}\n")
         f.write(f"keyfile {ssl_dir}/server.key\n")
         #f.write("capath path\n")
         f.write("ciphers ECDHE-ECDSA-AES256-GCM-SHA384\n")
         f.write("ciphers_tls1.3 TLS_AES_256_GCM_SHA384\n")
         f.write("clientid_prefixes client\n")
-        f.write(f"crlfile {ssl_dir}/crl.pem\n")
+        f.write(f"crlfile {ssl_dir / 'crl.pem'}\n")
         #f.write("dhparamfile file\n")
         f.write("disable_client_cert_date_checks true\n")
         f.write("http_dir .\n")
@@ -165,8 +167,8 @@ def write_config(filename, ports, per_listener_settings, plugver, acl_file):
         f.write("port %d\n" % (ports[3]))
 
 def client_check(username, password, rc, port):
-    connect_packet = mosq_test.gen_connect(client_id="client-id", username=username, password=password)
-    connack_packet = mosq_test.gen_connack(rc=rc)
+    connect_packet = mqtt_packets.gen_connect(client_id="client-id", username=username, password=password)
+    connack_packet = mqtt_packets.gen_connack(rc=rc)
     sock = mosq_test.do_client_connect(connect_packet, connack_packet, port=port)
     sock.close()
 
@@ -191,17 +193,17 @@ def do_test(per_listener_settings):
         client_check(None, None, 5, ports[0]) # Should fail
         client_check(None, None, 5, ports[1]) # Should fail
 
-        broker.send_signal(signal.SIGHUP)
+        mosq_test.reload_broker(broker)
         client_check("test-username", "cnwTICONIURW", 0, ports[0]) # Should succeed
 
-        broker.send_signal(signal.SIGHUP)
+        mosq_test.reload_broker(broker)
         client_check("test-username", "cnwTICONIURW", 0, ports[0]) # Should succeed
 
         rc = 0
     except Exception as err:
         print(err)
     finally:
-        broker.terminate()
+        mosq_test.terminate_broker(broker)
         broker.wait()
         os.remove(conf_file)
         os.remove(acl_file)

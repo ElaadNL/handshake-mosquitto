@@ -10,8 +10,8 @@ def write_config(filename, port):
     with open(filename, 'w') as f:
         f.write("listener %d\n" % (port))
         f.write("allow_anonymous false\n")
-        f.write(f"plugin {mosq_test.get_build_root()}/plugins/dynamic-security/mosquitto_dynamic_security.so\n")
-        f.write("plugin_opt_config_file %d/dynamic-security.json\n" % (port))
+        f.write(f"plugin {mosq_paths.plugin_dynamic_security}\n")
+        f.write(f"plugin_opt_config_file {Path(str(port), 'dynamic-security.json')}\n")
 
 
 port = mosq_test.get_port()
@@ -24,8 +24,8 @@ except FileExistsError:
     pass
 
 rc = 1
-connect_packet = mosq_test.gen_connect("ctrl-test", username="admin", password="adminadminadmin")
-connack_packet = mosq_test.gen_connack(rc=0)
+connect_packet = mqtt_packets.gen_connect("ctrl-test", username="admin", password="adminadminadmin")
+connack_packet = mqtt_packets.gen_connack(rc=0)
 
 env = os.environ
 env["MOSQUITTO_DYNSEC_PASSWORD"] = "adminadminadmin"
@@ -48,11 +48,10 @@ finally:
     except FileNotFoundError:
         pass
     os.rmdir(f"{port}")
-    broker.terminate()
+    mosq_test.terminate_broker(broker)
     broker.wait()
-    (stdo, stde) = broker.communicate()
     if rc:
-        print(stde.decode('utf-8'))
+        print(mosq_test.broker_log(broker))
 
 
 exit(rc)
