@@ -1,6 +1,8 @@
 name: Build patched mosquitto on upstream release
 
 on:
+  schedule:
+    - cron: '17 5 * * *'
   pull_request:
     branches: [ handshake ]
     paths:
@@ -9,80 +11,112 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Upstream tag to build (e.g. v2.1.2). Defaults to latest tag.'
+        description: 'Upstream tag to (re)build, e.g. v2.1.2. Leave empty to build the newest upstream release only if its image does not exist yet.'
         required: false
         type: string
 
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/elaadnl/handshake-mosquitto
+  UPSTREAM: eclipse-mosquitto/mosquitto
 
 jobs:
-  build:
+  plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      push: ${{ steps.plan.outputs.push }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      latest: ${{ steps.plan.outputs.latest }}
     steps:
-      - name: Resolve build ref
-        id: ref
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            REF="${{ inputs.tag }}"
-            if [[ -z "$REF" ]]; then
-              REF=$(git ls-remote --tags --refs --sort=-v:refname \
-                "https://github.com/${{ github.repository }}.git" 'v*' \
-                | head -1 | awk -F/ '{print $NF}')
-            fi
-            echo "ref=$REF" >> "$GITHUB_OUTPUT"
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Checkout build ref
+      - name: Checkout patch series
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.ref.outputs.ref }}
-          fetch-depth: 0
-          fetch-tags: true
+          sparse-checkout: patches
 
-      - name: Configure git identity
-        run: |
-          git config user.email "actions@github.com"
-          git config user.name "github-actions[bot]"
-
-      - name: Extract patches/ from handshake branch
-        id: extract
-        if: steps.ref.outputs.is_release == 'true'
+      - name: Resolve upstream tag and image version
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git fetch origin handshake:refs/remotes/origin/handshake
-          mkdir -p "$RUNNER_TEMP/patches"
-          git archive origin/handshake patches | tar -xC "$RUNNER_TEMP/"
-          ls -la "$RUNNER_TEMP/patches/"
-          echo "dir=$RUNNER_TEMP/patches" >> "$GITHUB_OUTPUT"
-
-      - name: Read patch revision
-        id: rev
-        run: |
-          set -euo pipefail
-          REV_FILE="${{ steps.extract.outputs.dir }}/.revision"
-          if [[ -f "$REV_FILE" ]]; then
-            REV=$(tr -d '[:space:]' < "$REV_FILE")
-          else
-            REV="0"
+          # Stable releases only, so release candidates and older
+          # maintenance lines never count as the newest release.
+          NEWEST=$(git ls-remote --tags --refs "https://github.com/$UPSTREAM.git" 'v*' \
+            | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          TAG="${INPUT_TAG:-$NEWEST}"
+          REV=0
+          if [[ -f patches/.revision ]]; then
+            REV=$(tr -d '[:space:]' < patches/.revision)
           fi
-          echo "revision=$REV" >> "$GITHUB_OUTPUT"
+          VERSION="$TAG-handshake-$REV"
+          echo "newest upstream release = $NEWEST"
+          echo "building                = $VERSION"
+
+          BUILD=true
+          if [[ "$EVENT" == "schedule" || ( "$EVENT" == "workflow_dispatch" && -z "$INPUT_TAG" ) ]]; then
+            REPO="${IMAGE#ghcr.io/}"
+            TOKEN=$(curl -fsS -u "$REGISTRY_USER:$REGISTRY_TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:$REPO:pull" | jq -r .token)
+            STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+              -H "Authorization: Bearer $TOKEN" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/$REPO/manifests/$VERSION")
+            case "$STATUS" in
+              200) echo "$IMAGE:$VERSION already exists; nothing to build."; BUILD=false ;;
+              404) echo "$IMAGE:$VERSION does not exist yet." ;;
+              *) echo "::error::Registry lookup of $IMAGE:$VERSION returned HTTP $STATUS"; exit 1 ;;
+            esac
+          fi
+
+          {
+            echo "build=$BUILD"
+            echo "push=$([[ "$EVENT" == "pull_request" ]] && echo false || echo true)"
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "latest=$([[ "$TAG" == "$NEWEST" ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout upstream ${{ needs.plan.outputs.tag }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ needs.plan.outputs.tag }}
+          path: mosquitto
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout patch series
+        uses: actions/checkout@v6
+        with:
+          path: handshake
+          sparse-checkout: patches
 
       - name: Apply patch series
-        if: steps.ref.outputs.is_release == 'true'
+        working-directory: mosquitto
         run: |
           set -euo pipefail
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
           shopt -s nullglob
-          patches=("${{ steps.extract.outputs.dir }}"/*.patch)
+          patches=("$GITHUB_WORKSPACE"/handshake/patches/*.patch)
           if (( ${#patches[@]} == 0 )); then
             echo "No patches to apply; building stock upstream."
             exit 0
@@ -108,6 +142,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends xsltproc docbook-xsl
 
       - name: Stage source tarball for docker/local
+        working-directory: mosquitto
         run: |
           set -euo pipefail
           # `make dist` produces dist/mosquitto-<version>.tar.gz with the
@@ -118,16 +153,16 @@ jobs:
 
       - name: Compute image tags
         id: tags
+        working-directory: mosquitto
         run: |
           set -euo pipefail
-          IS_RELEASE="${{ steps.ref.outputs.is_release }}"
-          REF="${{ steps.ref.outputs.ref }}"
-          REV="${{ steps.rev.outputs.revision }}"
           SHORT_SHA=$(git rev-parse --short HEAD)
           tags=()
-          if [[ "$IS_RELEASE" == "true" ]]; then
-            tags+=("${{ env.IMAGE }}:${REF}-handshake-${REV}")
-            tags+=("${{ env.IMAGE }}:latest")
+          if [[ "${{ needs.plan.outputs.push }}" == "true" ]]; then
+            tags+=("${{ env.IMAGE }}:${{ needs.plan.outputs.version }}")
+            if [[ "${{ needs.plan.outputs.latest }}" == "true" ]]; then
+              tags+=("${{ env.IMAGE }}:latest")
+            fi
           fi
           tags+=("${{ env.IMAGE }}:sha-${SHORT_SHA}")
           ( IFS=$'\n'; echo "tags<<EOF" >> "$GITHUB_OUTPUT"; echo "${tags[*]}" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT" )
@@ -135,12 +170,12 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
-          context: ./docker/local
-          file: ./docker/local/Dockerfile
+          context: ./mosquitto/docker/local
+          file: ./mosquitto/docker/local/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ steps.ref.outputs.is_release == 'true' }}
+          push: ${{ needs.plan.outputs.push == 'true' }}
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha,scope=mosquitto
           cache-to: type=gha,scope=mosquitto,mode=max
           build-args: |
-            VERSION=${{ steps.ref.outputs.ref }}-handshake-${{ steps.rev.outputs.revision }}
+            VERSION=${{ needs.plan.outputs.version }}
